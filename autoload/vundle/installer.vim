@@ -218,12 +218,47 @@ func! s:helptags(rtp) abort
   return 1
 endf
 
-func! s:sync(bang, bundle) abort
+func! s:get_current_origin_url(bundle) abort
+  let cmd = 'cd '.vundle#installer#shellesc(a:bundle.path()).' && git config --get remote.origin.url'
+  let cmd = g:shellesc_cd(cmd)
+  let out = s:strip(s:system(cmd))
+  return out
+endf
+
+func! s:make_sync_command(bang, bundle) abort
   let git_dir = expand(a:bundle.path().'/.git/', 1)
   if isdirectory(git_dir) || filereadable(expand(a:bundle.path().'/.git', 1))
-    if !(a:bang) | return 'todate' | endif
-    let cmd = 'cd '.vundle#installer#shellesc(a:bundle.path()).' && git pull && git submodule update --init --recursive'
 
+    let current_origin_url = s:get_current_origin_url(a:bundle)
+    if current_origin_url != a:bundle.uri
+      call s:log('Plugin URI change detected for Plugin ' . a:bundle.name)
+      call s:log('>  Plugin ' . a:bundle.name . ' old URI: ' . current_origin_url)
+      call s:log('>  Plugin ' . a:bundle.name . ' new URI: ' . a:bundle.uri)
+      " Directory names match but the origin remotes are not the same
+      let cmd_parts = [
+                  \ 'cd '.vundle#installer#shellesc(a:bundle.path()) ,
+                  \ 'git remote set-url origin ' . vundle#installer#shellesc(a:bundle.uri),
+                  \ 'git fetch',
+                  \ 'git reset --hard origin/HEAD',
+                  \ 'git submodule update --init --recursive',
+                  \ ]
+      let cmd = join(cmd_parts, ' && ')
+      let cmd = g:shellesc_cd(cmd)
+      let initial_sha = ''
+      return [cmd, initial_sha]
+    endif
+
+    if !(a:bang)
+      " The repo exists, and no !, so leave as it is.
+      return ['', '']
+    endif
+
+    let cmd_parts = [
+                \ 'cd '.vundle#installer#shellesc(a:bundle.path()),
+                \ 'git pull',
+                \ 'git submodule update --init --recursive',
+                \ ]
+    let cmd = join(cmd_parts, ' && ')
     let cmd = g:shellesc_cd(cmd)
 
     let get_current_sha = 'cd '.vundle#installer#shellesc(a:bundle.path()).' && git rev-parse HEAD'
@@ -232,6 +267,15 @@ func! s:sync(bang, bundle) abort
   else
     let cmd = 'git clone --recursive '.vundle#installer#shellesc(a:bundle.uri).' '.vundle#installer#shellesc(a:bundle.path())
     let initial_sha = ''
+  endif
+  return [cmd, initial_sha]
+endf
+
+
+func! s:sync(bang, bundle) abort
+  let [ cmd, initial_sha ] = s:make_sync_command(a:bang, a:bundle)
+  if empty(cmd)
+      return 'todate'
   endif
 
   let out = s:system(cmd)
@@ -282,4 +326,8 @@ func! s:log(str) abort
   let fmt = '%y%m%d %H:%M:%S'
   call add(g:vundle_log, '['.strftime(fmt).'] '.a:str)
   return a:str
+endf
+
+func! s:strip(str)
+  return substitute(a:str, '\%^\_s*\(.\{-}\)\_s*\%$', '\1', '')
 endf
